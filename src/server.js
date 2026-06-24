@@ -44,11 +44,7 @@ app.use("/api", apiLimiter);
 
 // --- Routes ---
 app.use("/api", routes);
-// Friendly base + health under /api too
-app.get("/api", (_req, res) =>
-  res.json({ name: "RAINZLIFESTYLE API", status: "ok", docs: "/api/products, /api/categories, /api/settings, ..." })
-);
-app.get("/api/health", (_req, res) => res.json({ ok: true, ts: Date.now() }))
+
 // --- 404 + error handler (last) ---
 app.use(notFound);
 app.use(errorHandler);

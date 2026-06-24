@@ -7,6 +7,10 @@ router.use("/orders", require("./orders.routes"));
 router.use("/coupons", require("./coupons.routes"));
 router.use("/auth", require("./auth.routes"));
 router.use("/settings", require("./settings.routes"));
-// Add as you build them: sale, customers, stores, banners, reviews, newsletter...
+router.use("/cart", require("./cart.routes"));
+router.use("/wishlist", require("./wishlist.routes"));
+router.use("/banners", require("./banners.routes"));
+router.use("/collections", require("./collections.routes"));
+router.use("/stores", require("./stores.routes"));
 
 module.exports = router;

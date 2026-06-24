@@ -23,7 +23,10 @@ router.post("/register", validate(registerSchema), asyncHandler(async (req, res)
 router.post("/login", validate(loginSchema), asyncHandler(async (req, res) => {
   const { email, password } = req.body;
   const { data, error } = await supabasePublic.auth.signInWithPassword({ email, password });
-  if (error) return res.status(401).json({ error: "Invalid email or password" });
+  if (error) {
+    console.log("LOGIN ERROR →", error.message, "| status:", error.status); // check backend terminal
+    return res.status(401).json({ error: "Invalid email or password" });
+  }
   res.json({ user: data.user, session: data.session });
 }));
 

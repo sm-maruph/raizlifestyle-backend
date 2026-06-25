@@ -3,6 +3,8 @@ const asyncHandler = require("../utils/asyncHandler");
 const { authenticate, requireAdmin } = require("../middleware/auth");
 const { supabaseAdmin } = require("../config/supabase");
 const { validate } = require("../middleware/validate");
+const { upload } = require("../middleware/upload");
+const { processMany } = require("../utils/image");
 const { z } = require("zod");
 
 const router = express.Router();
@@ -13,8 +15,9 @@ const createCategorySchema = z.object({
   name: z.string().min(1),
   slug: z.string().min(1),
   accent: z.string().min(1),
-  is_active: z.boolean().optional(),
-  position: z.number().int().optional(),
+  image: z.string().optional(),
+  is_active: z.coerce.boolean().optional(),
+  position: z.coerce.number().int().optional(),
 });
 const updateCategorySchema = createCategorySchema.partial();
 
@@ -39,7 +42,7 @@ const createSubSchema = z.object({
 router.get("/", asyncHandler(async (_req, res) => {
   const { data: categories, error: catErr } = await supabaseAdmin
     .from("categories")
-    .select("id, name, slug, accent, position")
+    .select("id, name, slug, accent, image, position")
     .eq("is_active", true)
     .order("position", { ascending: true });
   if (catErr) throw catErr;
@@ -62,7 +65,7 @@ router.get("/", asyncHandler(async (_req, res) => {
       return { id: group.id, title: group.title, subcategories: subs || [] };
     }));
 
-    return { id: cat.id, name: cat.name, slug: cat.slug, accent: cat.accent, groups: groupsWithSubs };
+    return { id: cat.id, name: cat.name, slug: cat.slug, accent: cat.accent, image: cat.image || null, groups: groupsWithSubs };
   }));
 
   res.set("Cache-Control", "public, max-age=120");
@@ -70,14 +73,24 @@ router.get("/", asyncHandler(async (_req, res) => {
 }));
 
 // ---- Category CRUD ----
-router.post("/", authenticate, requireAdmin, validate(createCategorySchema), asyncHandler(async (req, res) => {
-  const { data, error } = await supabaseAdmin.from("categories").insert(req.body).select().single();
+router.post("/", authenticate, requireAdmin, upload.single("image"), validate(createCategorySchema), asyncHandler(async (req, res) => {
+  const body = { ...req.body };
+  if (req.file) {
+    const [up] = await processMany("category-images", [req.file], { folder: "categories", thumb: false });
+    body.image = up?.url || null;
+  }
+  const { data, error } = await supabaseAdmin.from("categories").insert(body).select().single();
   if (error) throw error;
   res.status(201).json(data);
 }));
 
-router.put("/:id", authenticate, requireAdmin, validate(updateCategorySchema), asyncHandler(async (req, res) => {
-  const { data, error } = await supabaseAdmin.from("categories").update(req.body).eq("id", req.params.id).select().single();
+router.put("/:id", authenticate, requireAdmin, upload.single("image"), validate(updateCategorySchema), asyncHandler(async (req, res) => {
+  const body = { ...req.body };
+  if (req.file) {
+    const [up] = await processMany("category-images", [req.file], { folder: "categories", thumb: false });
+    body.image = up?.url || null;
+  }
+  const { data, error } = await supabaseAdmin.from("categories").update(body).eq("id", req.params.id).select().single();
   if (error) throw error;
   res.json(data);
 }));

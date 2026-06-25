@@ -19,7 +19,10 @@ router.post("/", optionalAuth, validate(orderSchema), asyncHandler(async (req, r
   const discount = 0; // see coupons route for the validation helper to plug in
   const total = subtotal + delivery - discount;
 
+  
+
   const client = userClient(req.accessToken); // acts as the user (or guest) so RLS applies
+  console.log("ORDER AUTH →", req.user ? `user ${req.user.id}` : "GUEST", "| token?", !!req.accessToken);  // <-- ADD THIS
   const { data, error } = await client.rpc("place_order", {
     p_customer_name: b.customer_name,
     p_customer_phone: b.customer_phone,

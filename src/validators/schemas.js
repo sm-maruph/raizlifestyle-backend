@@ -25,6 +25,7 @@ const listQuery = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(60).default(24),
   category: z.string().optional(),
+  subcategory: z.string().optional(),
   search: z.string().max(120).optional(),
   sort: z.enum(["newest", "price-asc", "price-desc", "rating"]).default("newest"),
 });

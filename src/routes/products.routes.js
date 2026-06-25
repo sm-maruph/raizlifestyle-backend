@@ -14,16 +14,17 @@ const asJson = (v) => { if (Array.isArray(v)) return v; try { return JSON.parse(
 
 // GET /api/products  (public, paginated, filtered) — selects only needed columns
 router.get("/", validate(listQuery, "query"), asyncHandler(async (req, res) => {
-  const { page, pageSize, category, search, sort } = req.query;
+  const { page, pageSize, category, subcategory, search, sort } = req.query;
   const from = (page - 1) * pageSize;
   const to = from + pageSize - 1;
 
   let q = supabaseAdmin
     .from("products_view")
-    .select("id,slug,name,brand,price,old_price,image,images,rating,category_name,subcategory_name,in_stock", { count: "exact" })
+    .select("id,slug,name,brand,price,old_price,image,images,rating,category_name,category_slug,subcategory_name,subcategory_slug,in_stock,sizes,colors", { count: "exact" })
     .eq("is_active", true);
 
   if (category) q = q.eq("category_slug", category);
+  if (subcategory) q = q.eq("subcategory_slug", subcategory);
   if (search) q = q.ilike("name", `%${search}%`);
   if (sort === "price-asc") q = q.order("price", { ascending: true });
   else if (sort === "price-desc") q = q.order("price", { ascending: false });

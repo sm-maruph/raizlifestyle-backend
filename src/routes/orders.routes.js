@@ -19,11 +19,9 @@ router.post("/", optionalAuth, validate(orderSchema), asyncHandler(async (req, r
   const discount = 0; // see coupons route for the validation helper to plug in
   const total = subtotal + delivery - discount;
 
-  
-
   const client = userClient(req.accessToken); // acts as the user (or guest) so RLS applies
-  console.log("ORDER AUTH →", req.user ? `user ${req.user.id}` : "GUEST", "| token?", !!req.accessToken);  // <-- ADD THIS
   const { data, error } = await client.rpc("place_order", {
+    p_user_id: req.user?.id || null,
     p_customer_name: b.customer_name,
     p_customer_phone: b.customer_phone,
     p_address: b.address,
@@ -64,9 +62,32 @@ router.get("/", authenticate, requireAdmin, asyncHandler(async (req, res) => {
 // PATCH /api/orders/:id/status  (admin)
 router.patch("/:id/status", authenticate, requireAdmin, asyncHandler(async (req, res) => {
   const allowed = ["Pending", "Processing", "Shipped", "Delivered", "Cancelled"];
-  if (!allowed.includes(req.body.status)) return res.status(400).json({ error: "Invalid status" });
-  const { data, error } = await supabaseAdmin.from("orders").update({ status: req.body.status }).eq("id", req.params.id).select().single();
+  const next = req.body.status;
+  if (!allowed.includes(next)) return res.status(400).json({ error: "Invalid status" });
+
+  // read previous status first (to manage stock transitions)
+  const { data: prev } = await supabaseAdmin.from("orders").select("status").eq("id", req.params.id).single();
+  const wasCancelled = prev?.status === "Cancelled";
+
+  const { data, error } = await supabaseAdmin.from("orders").update({ status: next }).eq("id", req.params.id).select().single();
   if (error) throw error;
+
+  // Stock transitions:
+  //  - moving INTO Cancelled  -> restock items (add qty back)
+  //  - moving OUT of Cancelled -> re-decrement items (subtract again)
+  if (next === "Cancelled" && !wasCancelled) {
+    await supabaseAdmin.rpc("restock_order", { p_order_id: req.params.id });
+  } else if (wasCancelled && next !== "Cancelled") {
+    // re-apply the original deduction
+    const { data: items } = await supabaseAdmin.from("order_items").select("product_id, qty").eq("order_id", req.params.id);
+    for (const it of items || []) {
+      if (!it.product_id) continue;
+      const { data: prod } = await supabaseAdmin.from("products").select("stock").eq("id", it.product_id).single();
+      const newStock = Math.max(0, Number(prod?.stock || 0) - Number(it.qty || 0));
+      await supabaseAdmin.from("products").update({ stock: newStock }).eq("id", it.product_id);
+    }
+  }
+
   res.json(data);
 }));
 

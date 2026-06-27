@@ -1,67 +1,37 @@
-// Verify the Supabase access token locally (fast, no network call), attach req.user.
-// requireAdmin additionally checks the user's profile role in the DB.
-const jwt = require("jsonwebtoken");
+// Verify the Supabase access token and attach req.user.
+// Verifies via Supabase (works with ANY JWT alg: HS256/ES256).
 const { supabaseAdmin } = require("../config/supabase");
 
-// function authenticate(req, res, next) {
-//   const header = req.headers.authorization || "";
-//   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
-//   if (!token) return res.status(401).json({ error: "Authentication required" });
-//   try {
-//     const payload = jwt.verify(token, process.env.SUPABASE_JWT_SECRET);
-//     req.user = { id: payload.sub, email: payload.email };
-//     req.accessToken = token;
-//     next();
-//   } catch {
-//     return res.status(401).json({ error: "Invalid or expired token" });
-//   }
-// }
-
+async function resolveUser(token) {
+  if (!token) return null;
+  try {
+    const { data, error } = await supabaseAdmin.auth.getUser(token);
+    if (error || !data?.user) return null;
+    return { id: data.user.id, email: data.user.email };
+  } catch {
+    return null;
+  }
+}
 
 async function authenticate(req, res, next) {
   const header = req.headers.authorization || "";
-  const token = header.startsWith("Bearer ")
-    ? header.slice(7)
-    : null;
-
-  if (!token) {
-    return res.status(401).json({
-      error: "Authentication required",
-    });
-  }
-
-  const {
-    data: { user },
-    error,
-  } = await supabaseAdmin.auth.getUser(token);
-
-  if (error || !user) {
-    return res.status(401).json({
-      error: "Invalid token",
-    });
-  }
-
-  req.user = {
-    id: user.id,
-    email: user.email,
-  };
-
+  const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+  if (!token) return res.status(401).json({ error: "Authentication required" });
+  const user = await resolveUser(token);
+  if (!user) return res.status(401).json({ error: "Invalid or expired token" });
+  req.user = user;
   req.accessToken = token;
-
   next();
 }
 
-// Like authenticate, but doesn't fail if no token (guest-friendly routes).
-function optionalAuth(req, _res, next) {
+async function optionalAuth(req, _res, next) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   if (token) {
-    try {
-      const payload = jwt.verify(token, process.env.SUPABASE_JWT_SECRET);
-      req.user = { id: payload.sub, email: payload.email };
+    const user = await resolveUser(token);
+    if (user) {
+      req.user = user;
       req.accessToken = token;
-    } catch {
-      /* ignore bad token, treat as guest */
     }
   }
   next();

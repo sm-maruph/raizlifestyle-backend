@@ -1,5 +1,6 @@
 const express = require("express");
 const asyncHandler = require("../utils/asyncHandler");
+const { loadLiveCampaigns, applySaleToProduct } = require("../utils/salePricing");
 const { validate } = require("../middleware/validate");
 const { requireAdmin, authenticate } = require("../middleware/auth");
 const { upload } = require("../middleware/upload");
@@ -20,7 +21,7 @@ router.get("/", validate(listQuery, "query"), asyncHandler(async (req, res) => {
 
   let q = supabaseAdmin
     .from("products_view")
-    .select("id,slug,name,brand,price,old_price,image,images,rating,category_name,category_slug,subcategory_name,subcategory_slug,in_stock,sizes,colors", { count: "exact" })
+    .select("id,slug,name,brand,price,old_price,image,images,rating,reviews_count,category_id,subcategory_id,category_name,category_slug,subcategory_name,subcategory_slug,in_stock,sizes,colors", { count: "exact" })
     .eq("is_active", true);
 
   if (category) q = q.eq("category_slug", category);
@@ -33,8 +34,9 @@ router.get("/", validate(listQuery, "query"), asyncHandler(async (req, res) => {
 
   const { data, count, error } = await q.range(from, to);
   if (error) throw error;
-  res.set("Cache-Control", "public, max-age=60"); // short cache for listings
-  res.json({ items: data, total: count, page, pageSize });
+  const { live, linksByCamp } = await loadLiveCampaigns();
+  const items = (data || []).map((p) => applySaleToProduct(p, live, linksByCamp));
+  res.json({ items, total: count, page, pageSize });
 }));
 
 // GET /api/products/:slug  (public)
@@ -46,8 +48,8 @@ router.get("/:slug", asyncHandler(async (req, res) => {
     .eq("is_active", true)
     .single();
   if (error || !data) return res.status(404).json({ error: "Product not found" });
-  res.set("Cache-Control", "public, max-age=60");
-  res.json(data);
+  const { live, linksByCamp } = await loadLiveCampaigns();
+  res.json(applySaleToProduct(data, live, linksByCamp));
 }));
 
 // POST /api/products  (admin) — multipart with images[]

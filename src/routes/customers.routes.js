@@ -38,6 +38,8 @@ router.get("/", authenticate, requireAdmin, asyncHandler(async (_req, res) => {
       const ordersCount = list.length;
       const lastOrder = list[0]?.created_at || null; // orders already sorted desc
       const avg = paid.length ? Math.round(totalSpent / paid.length) : 0;
+      const topOrder = paid.reduce((m, o) => Math.max(m, Number(o.total || 0)), 0);
+      const firstOrder = list.length ? list[list.length - 1]?.created_at : null; // list is desc
       const status = totalSpent > 15000 ? "VIP" : ordersCount <= 2 ? "New" : "Active";
       const lastCity = list[0]?.city || null;
       const lastAddress = list[0]?.address || null;
@@ -52,7 +54,9 @@ router.get("/", authenticate, requireAdmin, asyncHandler(async (_req, res) => {
         ordersCount,
         totalSpent,
         avg,
+        topOrder,
         lastOrder,
+        firstOrder,
         status,
         orders: list.map((o) => ({
           id: o.order_code, total: Number(o.total || 0), date: o.created_at,
@@ -61,7 +65,39 @@ router.get("/", authenticate, requireAdmin, asyncHandler(async (_req, res) => {
       };
     });
 
-  res.json({ items: customers });
+  // ---- GUESTS: orders with no user_id, grouped by phone (a guest's identifier) ----
+  const guestOrders = (orders || []).filter((o) => !o.user_id);
+  const byPhone = new Map();
+  for (const o of guestOrders) {
+    const key = (o.customer_phone || "").trim() || `order:${o.id}`; // fall back to per-order if no phone
+    if (!byPhone.has(key)) byPhone.set(key, []);
+    byPhone.get(key).push(o);
+  }
+  const guests = [...byPhone.entries()].map(([key, list]) => {
+    const paid = list.filter((o) => o.status !== "Cancelled");
+    const totalSpent = paid.reduce((s, o) => s + Number(o.total || 0), 0);
+    const ordersCount = list.length;
+    const avg = paid.length ? Math.round(totalSpent / paid.length) : 0;
+    const topOrder = paid.reduce((m, o) => Math.max(m, Number(o.total || 0)), 0);
+    const lastOrder = list[0]?.created_at || null;          // desc
+    const firstOrder = list[list.length - 1]?.created_at || null;
+    const status = totalSpent > 15000 ? "VIP" : ordersCount <= 1 ? "New" : "Active";
+    return {
+      id: `guest:${key}`,
+      guest: true,
+      name: list[0]?.customer_name || "Guest",
+      email: null,
+      phone: list[0]?.customer_phone || "",
+      city: list[0]?.city || null,
+      address: list[0]?.address || null,
+      joined: firstOrder,            // guests "join" at their first order
+      ordersCount, totalSpent, avg, topOrder,
+      lastOrder, firstOrder, status,
+      orders: list.map((o) => ({ id: o.order_code, total: Number(o.total || 0), date: o.created_at, status: o.status })),
+    };
+  });
+
+  res.json({ items: customers, guests });
 }));
 
 module.exports = router;

@@ -5,21 +5,21 @@ const sharp = require("sharp");
 const crypto = require("crypto");
 const { supabaseAdmin } = require("../config/supabase");
 
-const MAIN_WIDTH = 1200; // product/banner main image cap
-const THUMB_WIDTH = 400; // grid thumbnail
-const QUALITY = 78; // WebP quality — small files, still crisp
+const MAIN_WIDTH = 1600;  // product main image cap (raised from 1200)
+const THUMB_WIDTH = 400;  // grid thumbnail
+const QUALITY = 86;       // WebP quality — crisp, still reasonably small (raised from 78)
 
 async function toWebp(buffer, width, quality = QUALITY) {
   return sharp(buffer)
     .rotate() // respect EXIF orientation
     .resize({ width, withoutEnlargement: true })
-    .webp({ quality })
+    .webp({ quality, effort: 5 })
     .toBuffer();
 }
 
 function randomName(folder, suffix = "") {
   const id = `${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
-  return `${folder ? folder.replace(/\/+$/,"") + "/" : ""}${id}${suffix}.webp`;
+  return `${folder ? folder.replace(/\/+$/, "") + "/" : ""}${id}${suffix}.webp`;
 }
 
 async function putObject(bucket, path, buffer) {
@@ -33,15 +33,26 @@ async function putObject(bucket, path, buffer) {
 }
 
 // Process a single file buffer -> { url, thumbUrl, bytes }
-async function processAndUpload(bucket, fileBuffer, { folder = "", main = true, thumb = true } = {}) {
+// opts: { folder, main, thumb, width, quality, thumbWidth, thumbQuality }
+async function processAndUpload(bucket, fileBuffer, opts = {}) {
+  const {
+    folder = "",
+    main = true,
+    thumb = true,
+    width = MAIN_WIDTH,
+    quality = QUALITY,
+    thumbWidth = THUMB_WIDTH,
+    thumbQuality = 72,
+  } = opts;
+
   const out = {};
   if (main) {
-    const buf = await toWebp(fileBuffer, MAIN_WIDTH);
+    const buf = await toWebp(fileBuffer, width, quality);
     out.url = await putObject(bucket, randomName(folder), buf);
     out.bytes = buf.length;
   }
   if (thumb) {
-    const tbuf = await toWebp(fileBuffer, THUMB_WIDTH, 70);
+    const tbuf = await toWebp(fileBuffer, thumbWidth, thumbQuality);
     out.thumbUrl = await putObject(bucket, randomName(folder, "-thumb"), tbuf);
   }
   return out;

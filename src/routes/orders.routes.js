@@ -4,6 +4,7 @@ const { validate } = require("../middleware/validate");
 const { optionalAuth, authenticate, requireAdmin } = require("../middleware/auth");
 const { userClient } = require("../utils/userClient");
 const { supabaseAdmin } = require("../config/supabase");
+const { evaluateCoupon, incrementCouponUsage } = require("../utils/couponPricing");
 const { orderSchema } = require("../validators/schemas");
 
 const router = express.Router();
@@ -13,11 +14,23 @@ const DELIVERY = { inside_dhaka: 80, outside_dhaka: 120 };
 router.post("/", optionalAuth, validate(orderSchema), asyncHandler(async (req, res) => {
   const b = req.body;
   const subtotal = b.items.reduce((s, it) => s + Number(it.price) * it.qty, 0);
-  const delivery = DELIVERY[b.delivery_zone];
+  let delivery = DELIVERY[b.delivery_zone];
 
-  // (Optional) re-validate coupon here and compute discount server-side
-  const discount = 0; // see coupons route for the validation helper to plug in
-  const total = subtotal + delivery - discount;
+  // Re-validate the coupon SERVER-SIDE and compute the real discount.
+  // Never trust a client-sent amount — this is what gets saved on the order.
+  let discount = 0;
+  let appliedCoupon = null;
+  if (b.coupon_code) {
+    const cp = await evaluateCoupon(b.coupon_code, subtotal);
+    if (cp.valid) {
+      discount = cp.discount;
+      if (cp.freeShipping) delivery = 0;
+      appliedCoupon = cp.coupon;
+    }
+    // If the coupon is no longer valid we simply ignore it (order still goes through at full price).
+  }
+
+  const total = Math.max(0, subtotal + delivery - discount);
 
   const client = userClient(req.accessToken); // acts as the user (or guest) so RLS applies
   const { data, error } = await client.rpc("place_order", {
@@ -31,12 +44,15 @@ router.post("/", optionalAuth, validate(orderSchema), asyncHandler(async (req, r
     p_delivery_charge: delivery,
     p_discount: discount,
     p_total: total,
-    p_coupon_code: b.coupon_code || null,
+    p_coupon_code: appliedCoupon ? appliedCoupon.code : null,
     p_payment_method: b.payment_method,
     p_note: b.note || null,
     p_items: b.items,
   });
   if (error) throw error;
+  // Coupon consumed — bump its usage counter (best effort)
+  if (appliedCoupon) await incrementCouponUsage(appliedCoupon.id);
+
   res.status(201).json({ order_code: data, subtotal, delivery, discount, total });
 }));
 

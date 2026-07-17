@@ -64,6 +64,18 @@ router.get("/track/:code", asyncHandler(async (req, res) => {
   res.json(data);
 }));
 
+// GET /api/orders/mine  (logged-in customer) — their own orders with items
+router.get("/mine", authenticate, asyncHandler(async (req, res) => {
+  const { data, error } = await supabaseAdmin
+    .from("orders")
+    .select("*, order_items(*)")
+    .eq("user_id", req.user.id)
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (error) throw error;
+  res.json({ items: data || [] });
+}));
+
 // GET /api/orders  (admin) — list with items
 router.get("/", authenticate, requireAdmin, asyncHandler(async (req, res) => {
   const { data, error } = await supabaseAdmin

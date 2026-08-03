@@ -11,13 +11,13 @@ router.get("/", authenticate, requireAdmin, asyncHandler(async (_req, res) => {
   let products, pErr;
   ({ data: products, error: pErr } = await supabaseAdmin
     .from("products")
-    .select("id, name, image, price, stock, low_stock_threshold, category_id")
+    .select("id, name, image, price, stock, size_stock, sizes, low_stock_threshold, category_id")
     .order("stock", { ascending: true }));
   if (pErr) {
     // likely the low_stock_threshold column hasn't been added — retry without it
     ({ data: products, error: pErr } = await supabaseAdmin
       .from("products")
-      .select("id, name, image, price, stock, category_id")
+      .select("id, name, image, price, stock, size_stock, sizes, category_id")
       .order("stock", { ascending: true }));
     if (pErr) throw pErr;
     (products || []).forEach((p) => { p.low_stock_threshold = 5; });
@@ -58,6 +58,7 @@ router.get("/", authenticate, requireAdmin, asyncHandler(async (_req, res) => {
     return {
       id: p.id, name: p.name, image: p.image, price: Number(p.price || 0),
       stock, threshold, level,
+      sizes: p.sizes || [], sizeStock: p.size_stock || {},
       orderedQty: s.orderedQty, activeQty: s.activeQty, cancelledQty: s.cancelledQty,
       byStatus: s.byStatus, suggestedRestock,
     };
@@ -69,7 +70,10 @@ router.get("/", authenticate, requireAdmin, asyncHandler(async (_req, res) => {
 // PATCH /api/inventory/:id  (admin) — set absolute stock and/or threshold
 router.patch("/:id", authenticate, requireAdmin, asyncHandler(async (req, res) => {
   const patch = {};
-  if (req.body.stock !== undefined) patch.stock = Math.max(0, parseInt(req.body.stock, 10) || 0);
+  if (req.body.size_stock && typeof req.body.size_stock === "object") {
+    patch.size_stock = Object.fromEntries(Object.entries(req.body.size_stock).map(([size, qty]) => [size, Math.max(0, parseInt(qty, 10) || 0)]));
+    patch.stock = Object.values(patch.size_stock).reduce((sum, qty) => sum + qty, 0);
+  } else if (req.body.stock !== undefined) patch.stock = Math.max(0, parseInt(req.body.stock, 10) || 0);
   if (req.body.low_stock_threshold !== undefined) patch.low_stock_threshold = Math.max(0, parseInt(req.body.low_stock_threshold, 10) || 0);
   const { data, error } = await supabaseAdmin.from("products").update(patch).eq("id", req.params.id).select().single();
   if (error) throw error;
@@ -79,10 +83,14 @@ router.patch("/:id", authenticate, requireAdmin, asyncHandler(async (req, res) =
 // POST /api/inventory/:id/restock  (admin) — add to stock
 router.post("/:id/restock", authenticate, requireAdmin, asyncHandler(async (req, res) => {
   const add = Math.max(0, parseInt(req.body.amount, 10) || 0);
-  const { data: prod, error: e1 } = await supabaseAdmin.from("products").select("stock").eq("id", req.params.id).single();
+  const { data: prod, error: e1 } = await supabaseAdmin.from("products").select("stock,size_stock,sizes").eq("id", req.params.id).single();
   if (e1) throw e1;
   const newStock = Number(prod?.stock || 0) + add;
-  const { data, error } = await supabaseAdmin.from("products").update({ stock: newStock }).eq("id", req.params.id).select().single();
+  const patch = { stock: newStock };
+  if (req.body.size && (prod.sizes || []).includes(req.body.size)) {
+    patch.size_stock = { ...(prod.size_stock || {}), [req.body.size]: Number(prod.size_stock?.[req.body.size] || 0) + add };
+  }
+  const { data, error } = await supabaseAdmin.from("products").update(patch).eq("id", req.params.id).select().single();
   if (error) throw error;
   res.json(data);
 }));

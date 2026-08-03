@@ -17,6 +17,8 @@ const productCreate = z.object({
   sizes: z.union([z.array(z.string()), z.string()]).optional(),   // CSV or array
   colors: z.union([z.array(z.any()), z.string()]).optional(),     // JSON string or array
   tags: z.union([z.array(z.string()), z.string()]).optional(),
+  size_chart_id: z.preprocess((value) => value === "" ? null : value, z.string().uuid().nullable().optional()),
+  size_stock: z.union([z.record(z.coerce.number().int().nonnegative()), z.string()]).optional(),
 });
 
 const productUpdate = productCreate.partial();
@@ -71,7 +73,23 @@ const couponValidateSchema = z.object({
   subtotal: num.nonnegative(),
 });
 
+const chartColumn = z.object({
+  key: z.string().min(1).max(60).regex(/^[a-z][a-z0-9_]*$/),
+  label: z.string().min(1).max(80),
+});
+const chartRow = z.record(z.union([z.string(), z.number(), z.null()]));
+const sizeChartCreate = z.object({
+  name: z.string().min(1).max(120),
+  title: z.string().min(1).max(200).default("Size chart"),
+  note: z.string().max(300).optional().default("Expected deviation < 3%"),
+  columns: z.array(chartColumn).min(1).max(12),
+  rows: z.array(chartRow).min(1).max(100),
+  is_active: z.boolean().optional().default(true),
+});
+const sizeChartUpdate = sizeChartCreate.partial();
+
 module.exports = {
   productCreate, productUpdate, listQuery,
   registerSchema, loginSchema, orderSchema, couponValidateSchema,
+  sizeChartCreate, sizeChartUpdate,
 };

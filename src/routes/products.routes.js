@@ -12,6 +12,7 @@ const router = express.Router();
 const slugify = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 const asArray = (v) => (Array.isArray(v) ? v : typeof v === "string" && v ? v.split(",").map((x) => x.trim()).filter(Boolean) : []);
 const asJson = (v) => { if (Array.isArray(v)) return v; try { return JSON.parse(v || "[]"); } catch { return []; } };
+const asObject = (v) => { if (v && typeof v === "object" && !Array.isArray(v)) return v; try { const parsed = JSON.parse(v || "{}"); return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}; } catch { return {}; } };
 
 // GET /api/products  (public, paginated, filtered) — selects only needed columns
 router.get("/", validate(listQuery, "query"), asyncHandler(async (req, res) => {
@@ -34,8 +35,17 @@ router.get("/", validate(listQuery, "query"), asyncHandler(async (req, res) => {
 
   const { data, count, error } = await q.range(from, to);
   if (error) throw error;
+  const ids = (data || []).map((product) => product.id);
+  let stockById = new Map();
+  if (ids.length) {
+    const { data: stockRows } = await supabaseAdmin.from("products").select("id,stock,size_stock").in("id", ids);
+    stockById = new Map((stockRows || []).map((product) => [product.id, product]));
+  }
   const { live, linksByCamp } = await loadLiveCampaigns();
-  const items = (data || []).map((p) => applySaleToProduct(p, live, linksByCamp));
+  const items = (data || []).map((p) => {
+    const inventory = stockById.get(p.id) || {};
+    return applySaleToProduct({ ...p, stock: inventory.stock ?? 0, size_stock: inventory.size_stock || {} }, live, linksByCamp);
+  });
   res.json({ items, total: count, page, pageSize });
 }));
 
@@ -49,7 +59,22 @@ router.get("/:slug", asyncHandler(async (req, res) => {
     .single();
   if (error || !data) return res.status(404).json({ error: "Product not found" });
   const { live, linksByCamp } = await loadLiveCampaigns();
-  res.json(applySaleToProduct(data, live, linksByCamp));
+  const { data: rawProduct } = await supabaseAdmin
+    .from("products")
+    .select("size_chart_id,size_stock")
+    .eq("id", data.id)
+    .single();
+  let sizeChart = null;
+  if (rawProduct?.size_chart_id) {
+    const { data: chart } = await supabaseAdmin
+      .from("size_chart_templates")
+      .select("*")
+      .eq("id", rawProduct.size_chart_id)
+      .eq("is_active", true)
+      .maybeSingle();
+    sizeChart = chart || null;
+  }
+  res.json({ ...applySaleToProduct(data, live, linksByCamp), size_chart_id: rawProduct?.size_chart_id || null, size_chart: sizeChart, size_stock: rawProduct?.size_stock || {} });
 }));
 
 // POST /api/products  (admin) — multipart with images[]
@@ -67,8 +92,11 @@ router.post("/", authenticate, requireAdmin, upload.array("images", 8),
       category_id: b.category_id || null, subcategory_id: b.subcategory_id || null,
       price: b.price, old_price: b.old_price ?? null, stock: b.stock,
       sizes: asArray(b.sizes), colors: asJson(b.colors), tags: asArray(b.tags),
+      size_chart_id: b.size_chart_id || null,
+      size_stock: asObject(b.size_stock),
       image: uploaded[0]?.url || null,
     };
+    if (Object.keys(insert.size_stock).length) insert.stock = Object.values(insert.size_stock).reduce((sum, qty) => sum + Math.max(0, Number(qty || 0)), 0);
     const { data: product, error } = await supabaseAdmin.from("products").insert(insert).select().single();
     if (error) throw error;
 
@@ -86,12 +114,16 @@ router.put("/:id", authenticate, requireAdmin, upload.array("images", 8),
   validate(productUpdate), asyncHandler(async (req, res) => {
     const b = req.body;
     const patch = {};
-    ["name", "brand", "description", "slug", "category_id", "subcategory_id", "price", "old_price", "stock"].forEach((k) => {
+    ["name", "brand", "description", "slug", "category_id", "subcategory_id", "price", "old_price", "stock", "size_chart_id"].forEach((k) => {
       if (b[k] !== undefined) patch[k] = b[k];
     });
     if (b.sizes !== undefined) patch.sizes = asArray(b.sizes);
     if (b.colors !== undefined) patch.colors = asJson(b.colors);
     if (b.tags !== undefined) patch.tags = asArray(b.tags);
+    if (b.size_stock !== undefined) {
+      patch.size_stock = asObject(b.size_stock);
+      if (Object.keys(patch.size_stock).length) patch.stock = Object.values(patch.size_stock).reduce((sum, qty) => sum + Math.max(0, Number(qty || 0)), 0);
+    }
 
     if (req.files?.length) {
       const uploaded = await processMany("product-images", req.files, { folder: "products", thumb: false });

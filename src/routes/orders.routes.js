@@ -13,6 +13,18 @@ const DELIVERY = { inside_dhaka: 80, outside_dhaka: 120 };
 // POST /api/orders  (guest or logged-in) — totals computed SERVER-SIDE (never trust client)
 router.post("/", optionalAuth, validate(orderSchema), asyncHandler(async (req, res) => {
   const b = req.body;
+  const sizedProducts = new Map();
+  for (const item of b.items) {
+    if (!item.product_id) continue;
+    const { data: product, error: productError } = await supabaseAdmin
+      .from("products").select("id,stock,sizes,size_stock").eq("id", item.product_id).single();
+    if (productError || !product) return res.status(400).json({ error: `Product "${item.name}" is unavailable` });
+    const tracksSizes = (product.sizes || []).length > 0 && Object.keys(product.size_stock || {}).length > 0;
+    const available = tracksSizes ? Number(product.size_stock?.[item.size] || 0) : Number(product.stock || 0);
+    if (tracksSizes && (!item.size || !(product.sizes || []).includes(item.size))) return res.status(400).json({ error: `Select a valid size for "${item.name}"` });
+    if (Number(item.qty) > available) return res.status(409).json({ error: item.size ? `Only ${available} of "${item.name}" available in size ${item.size}` : `Only ${available} of "${item.name}" available` });
+    if (tracksSizes) sizedProducts.set(product.id, product);
+  }
   const subtotal = b.items.reduce((s, it) => s + Number(it.price) * it.qty, 0);
   let delivery = DELIVERY[b.delivery_zone];
 
@@ -50,6 +62,15 @@ router.post("/", optionalAuth, validate(orderSchema), asyncHandler(async (req, r
     p_items: b.items,
   });
   if (error) throw error;
+  // place_order already deducts products.stock. Keep the selected-size map in sync.
+  for (const item of b.items) {
+    const product = sizedProducts.get(item.product_id);
+    if (!product) continue;
+    const sizeStock = { ...(product.size_stock || {}) };
+    sizeStock[item.size] = Math.max(0, Number(sizeStock[item.size] || 0) - Number(item.qty || 0));
+    product.size_stock = sizeStock;
+    await supabaseAdmin.from("products").update({ size_stock: sizeStock }).eq("id", product.id);
+  }
   // Coupon consumed — bump its usage counter (best effort)
   if (appliedCoupon) await incrementCouponUsage(appliedCoupon.id);
 
@@ -105,18 +126,82 @@ router.patch("/:id/status", authenticate, requireAdmin, asyncHandler(async (req,
   //  - moving OUT of Cancelled -> re-decrement items (subtract again)
   if (next === "Cancelled" && !wasCancelled) {
     await supabaseAdmin.rpc("restock_order", { p_order_id: req.params.id });
+    const { data: items } = await supabaseAdmin.from("order_items").select("product_id,size,qty").eq("order_id", req.params.id);
+    for (const it of items || []) {
+      if (!it.product_id || !it.size) continue;
+      const { data: prod } = await supabaseAdmin.from("products").select("size_stock").eq("id", it.product_id).single();
+      if (!Object.keys(prod?.size_stock || {}).length) continue;
+      const sizeStock = { ...prod.size_stock, [it.size]: Number(prod.size_stock[it.size] || 0) + Number(it.qty || 0) };
+      await supabaseAdmin.from("products").update({ size_stock: sizeStock }).eq("id", it.product_id);
+    }
   } else if (wasCancelled && next !== "Cancelled") {
     // re-apply the original deduction
-    const { data: items } = await supabaseAdmin.from("order_items").select("product_id, qty").eq("order_id", req.params.id);
+    const { data: items } = await supabaseAdmin.from("order_items").select("product_id,size,qty").eq("order_id", req.params.id);
     for (const it of items || []) {
       if (!it.product_id) continue;
-      const { data: prod } = await supabaseAdmin.from("products").select("stock").eq("id", it.product_id).single();
+      const { data: prod } = await supabaseAdmin.from("products").select("stock,size_stock").eq("id", it.product_id).single();
       const newStock = Math.max(0, Number(prod?.stock || 0) - Number(it.qty || 0));
-      await supabaseAdmin.from("products").update({ stock: newStock }).eq("id", it.product_id);
+      const patch = { stock: newStock };
+      if (it.size && Object.keys(prod?.size_stock || {}).length) {
+        patch.size_stock = { ...prod.size_stock, [it.size]: Math.max(0, Number(prod.size_stock[it.size] || 0) - Number(it.qty || 0)) };
+      }
+      await supabaseAdmin.from("products").update(patch).eq("id", it.product_id);
     }
   }
 
   res.json(data);
+}));
+
+// DELETE /api/orders/:id  (admin)
+router.delete("/:id", authenticate, requireAdmin, asyncHandler(async (req, res) => {
+  const { data: order, error: findError } = await supabaseAdmin
+    .from("orders")
+    .select("id,status")
+    .eq("id", req.params.id)
+    .maybeSingle();
+  if (findError) throw findError;
+  if (!order) return res.status(404).json({ error: "Order not found" });
+
+  const { data: items, error: itemsError } = await supabaseAdmin
+    .from("order_items")
+    .select("product_id,size,qty")
+    .eq("order_id", order.id);
+  if (itemsError) throw itemsError;
+
+  // Active orders have already reduced inventory. Restore it before removal;
+  // cancelled orders were restored when their status changed.
+  if (order.status !== "Cancelled") {
+    const { error: restockError } = await supabaseAdmin.rpc("restock_order", { p_order_id: order.id });
+    if (restockError) throw restockError;
+
+    for (const item of items || []) {
+      if (!item.product_id || !item.size) continue;
+      const { data: product, error: productError } = await supabaseAdmin
+        .from("products")
+        .select("size_stock")
+        .eq("id", item.product_id)
+        .maybeSingle();
+      if (productError) throw productError;
+      if (!product || !Object.keys(product.size_stock || {}).length) continue;
+
+      const sizeStock = {
+        ...product.size_stock,
+        [item.size]: Number(product.size_stock[item.size] || 0) + Number(item.qty || 0),
+      };
+      const { error: stockError } = await supabaseAdmin
+        .from("products")
+        .update({ size_stock: sizeStock })
+        .eq("id", item.product_id);
+      if (stockError) throw stockError;
+    }
+  }
+
+  const { error: childError } = await supabaseAdmin.from("order_items").delete().eq("order_id", order.id);
+  if (childError) throw childError;
+  const { error: deleteError } = await supabaseAdmin.from("orders").delete().eq("id", order.id);
+  if (deleteError) throw deleteError;
+
+  res.json({ success: true });
 }));
 
 module.exports = router;

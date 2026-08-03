@@ -7,6 +7,13 @@ function errorHandler(err, _req, res, _next) {
   // Multer + known errors
   if (err.code === "LIMIT_FILE_SIZE") return res.status(413).json({ error: "Image too large (max 8MB)" });
   if (err.message === "Only image files are allowed") return res.status(415).json({ error: err.message });
+  if (err.code === "PGRST205") {
+    console.error(err);
+    return res.status(503).json({
+      error: "Database migration required",
+      details: err.message,
+    });
+  }
 
   const status = err.status || 500;
   const message = status === 500 ? "Internal server error" : err.message;

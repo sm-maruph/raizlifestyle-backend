@@ -17,5 +17,6 @@ router.use("/reviews", require("./reviews.routes"));   // <-- ADD THIS
 router.use("/sale", require("./sale.routes"));         // <-- ADD THIS
 router.use("/stores", require("./stores.routes"));
 router.use("/inventory", require("./inventory.routes")); // <-- ADD THIS
+router.use("/size-charts", require("./sizeCharts.routes"));
 
 module.exports = router;

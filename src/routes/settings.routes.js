@@ -32,7 +32,10 @@ function clean(body) {
 router.get("/", asyncHandler(async (_req, res) => {
   const { data, error } = await supabaseAdmin.from("store_settings").select("*").eq("id", 1).single();
   if (error) throw error;
-  res.set("Cache-Control", "public, max-age=60");
+  // Settings include operational flags such as maintenance mode. Never let a
+  // browser or CDN serve a stale value after an admin changes them.
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Surrogate-Control", "no-store");
   res.json(data);
 }));
 

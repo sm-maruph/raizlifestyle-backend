@@ -47,6 +47,21 @@ router.get("/", asyncHandler(async (_req, res) => {
     .order("position", { ascending: true });
   if (catErr) throw catErr;
 
+  const { data: productRows, error: countErr } = await supabaseAdmin
+    .from("products_view")
+    .select("category_slug, subcategory_slug")
+    .eq("is_active", true);
+  if (countErr) throw countErr;
+  const categoryCounts = new Map();
+  const subcategoryCounts = new Map();
+  (productRows || []).forEach((product) => {
+    if (product.category_slug) categoryCounts.set(product.category_slug, (categoryCounts.get(product.category_slug) || 0) + 1);
+    if (product.category_slug && product.subcategory_slug) {
+      const key = `${product.category_slug}:${product.subcategory_slug}`;
+      subcategoryCounts.set(key, (subcategoryCounts.get(key) || 0) + 1);
+    }
+  });
+
   const tree = await Promise.all((categories || []).map(async (cat) => {
     const { data: groups, error: gErr } = await supabaseAdmin
       .from("category_groups")
@@ -62,10 +77,17 @@ router.get("/", asyncHandler(async (_req, res) => {
         .eq("group_id", group.id)
         .order("position", { ascending: true });
       if (sErr) throw sErr;
-      return { id: group.id, title: group.title, subcategories: subs || [] };
+      return {
+        id: group.id,
+        title: group.title,
+        subcategories: (subs || []).map((sub) => ({
+          ...sub,
+          count: subcategoryCounts.get(`${cat.slug}:${sub.slug}`) || 0,
+        })),
+      };
     }));
 
-    return { id: cat.id, name: cat.name, slug: cat.slug, accent: cat.accent, image: cat.image || null, groups: groupsWithSubs };
+    return { id: cat.id, name: cat.name, slug: cat.slug, accent: cat.accent, image: cat.image || null, count: categoryCounts.get(cat.slug) || 0, groups: groupsWithSubs };
   }));
 
   res.set("Cache-Control", "public, max-age=120");

@@ -14,6 +14,21 @@ const asArray = (v) => (Array.isArray(v) ? v : typeof v === "string" && v ? v.sp
 const asJson = (v) => { if (Array.isArray(v)) return v; try { return JSON.parse(v || "[]"); } catch { return []; } };
 const asObject = (v) => { if (v && typeof v === "object" && !Array.isArray(v)) return v; try { const parsed = JSON.parse(v || "{}"); return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {}; } catch { return {}; } };
 
+async function uniqueProductSlug(value) {
+  const base = slugify(value) || "product";
+  const { data, error } = await supabaseAdmin
+    .from("products")
+    .select("slug")
+    .or(`slug.eq.${base},slug.like.${base}-%`);
+  if (error) throw error;
+
+  const used = new Set((data || []).map((product) => product.slug));
+  if (!used.has(base)) return base;
+  let suffix = 2;
+  while (used.has(`${base}-${suffix}`)) suffix += 1;
+  return `${base}-${suffix}`;
+}
+
 // GET /api/products  (public, paginated, filtered) — selects only needed columns
 router.get("/", validate(listQuery, "query"), asyncHandler(async (req, res) => {
   const { page, pageSize, category, subcategory, search, sort } = req.query;
@@ -88,7 +103,7 @@ router.post("/", authenticate, requireAdmin, upload.array("images", 8),
     // 2) insert product
     const insert = {
       name: b.name, brand: b.brand, description: b.description,
-      slug: b.slug || slugify(b.name),
+      slug: b.slug || await uniqueProductSlug(b.name),
       category_id: b.category_id || null, subcategory_id: b.subcategory_id || null,
       price: b.price, old_price: b.old_price ?? null, stock: b.stock,
       sizes: asArray(b.sizes), colors: asJson(b.colors), tags: asArray(b.tags),

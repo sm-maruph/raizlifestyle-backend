@@ -14,6 +14,11 @@ function errorHandler(err, _req, res, _next) {
       details: err.message,
     });
   }
+  if (err.code === "23505") {
+    return res.status(409).json({
+      error: "A product with this identifier already exists. Please try again.",
+    });
+  }
 
   const status = err.status || 500;
   const message = status === 500 ? "Internal server error" : err.message;

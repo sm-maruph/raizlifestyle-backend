@@ -33,3 +33,16 @@ Postgres (RLS) and Storage. Optimizes images (WebP) before storing.
 
 ## Next to add (same patterns)
 sale, customers, stores, banners/collections, product reviews, newsletter.
+# Size chart measurement units
+
+Size chart measurement cells are stored and returned in centimeters. The size
+column is a label and is never converted. Create/update requests accept only
+`unit: "cm"` (omitting the unit also means cm); API responses include `unit: "cm"`.
+
+The existing eight templates were converted from inches using a factor of 2.54,
+rounded to two decimal places. Original records are saved in
+`supabase/backups/size-charts-before-cm.json`. The one-time migration is
+`node scripts/convert-size-charts-to-cm.js --apply`; running it again with that
+snapshot skips already converted records and refuses changed measurements.
+Keep the snapshot to prevent accidental repeat conversion. New templates must
+be entered directly in cm and must not be included in the inch migration.

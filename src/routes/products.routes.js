@@ -87,7 +87,7 @@ router.get("/:slug", asyncHandler(async (req, res) => {
       .eq("id", rawProduct.size_chart_id)
       .eq("is_active", true)
       .maybeSingle();
-    sizeChart = chart || null;
+    sizeChart = chart ? { ...chart, unit: "cm" } : null;
   }
   res.json({ ...applySaleToProduct(data, live, linksByCamp), size_chart_id: rawProduct?.size_chart_id || null, size_chart: sizeChart, size_stock: rawProduct?.size_stock || {} });
 }));

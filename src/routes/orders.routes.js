@@ -6,6 +6,7 @@ const { userClient } = require("../utils/userClient");
 const { supabaseAdmin } = require("../config/supabase");
 const { evaluateCoupon, incrementCouponUsage } = require("../utils/couponPricing");
 const { orderSchema } = require("../validators/schemas");
+const { colorImage } = require("../utils/productColors");
 
 const router = express.Router();
 const DELIVERY = { inside_dhaka: 80, outside_dhaka: 120 };
@@ -17,8 +18,9 @@ router.post("/", optionalAuth, validate(orderSchema), asyncHandler(async (req, r
   for (const item of b.items) {
     if (!item.product_id) continue;
     const { data: product, error: productError } = await supabaseAdmin
-      .from("products").select("id,stock,sizes,size_stock").eq("id", item.product_id).single();
+      .from("products").select("id,stock,sizes,size_stock,image,colors,product_images(url,position)").eq("id", item.product_id).single();
     if (productError || !product) return res.status(400).json({ error: `Product "${item.name}" is unavailable` });
+    item.image = colorImage(product, item.color);
     const tracksSizes = (product.sizes || []).length > 0 && Object.keys(product.size_stock || {}).length > 0;
     const available = tracksSizes ? Number(product.size_stock?.[item.size] || 0) : Number(product.stock || 0);
     if (tracksSizes && (!item.size || !(product.sizes || []).includes(item.size))) return res.status(400).json({ error: `Select a valid size for "${item.name}"` });

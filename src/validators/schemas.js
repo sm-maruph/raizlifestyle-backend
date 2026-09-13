@@ -79,6 +79,7 @@ const chartColumn = z.object({
 });
 const chartRow = z.record(z.union([z.string(), z.number(), z.null()]));
 const sizeChartCreate = z.object({
+  unit: z.literal("cm").default("cm"),
   name: z.string().min(1).max(120),
   title: z.string().min(1).max(200).default("Size chart"),
   note: z.string().max(300).optional().default("Expected deviation < 3%"),

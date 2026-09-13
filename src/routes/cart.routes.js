@@ -2,6 +2,7 @@ const express = require("express");
 const asyncHandler = require("../utils/asyncHandler");
 const { authenticate } = require("../middleware/auth");
 const { supabaseAdmin } = require("../config/supabase");
+const { colorImage } = require("../utils/productColors");
 
 const router = express.Router();
 router.use(authenticate); // cart is always user-scoped
@@ -10,11 +11,14 @@ router.use(authenticate); // cart is always user-scoped
 router.get("/", asyncHandler(async (req, res) => {
   const { data, error } = await supabaseAdmin
     .from("cart_items")
-    .select("id,size,color,qty,product:products(id,slug,name,image,price,old_price,stock,size_stock,sizes)")
+    .select("id,size,color,qty,product:products(id,slug,name,image,price,old_price,stock,size_stock,sizes,colors,product_images(url,position))")
     .eq("user_id", req.user.id)
     .order("created_at", { ascending: true });
   if (error) throw error;
-  res.json({ items: data });
+  res.json({ items: (data || []).map((item) => ({
+    ...item,
+    product: item.product ? { ...item.product, image: colorImage(item.product, item.color) } : null,
+  })) });
 }));
 
 // POST /api/cart  { product_id, size, color, qty } -> add or increment

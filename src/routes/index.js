@@ -4,6 +4,7 @@ const router = express.Router();
 router.use("/products", require("./products.routes"));
 router.use("/categories", require("./categories.routes"));
 router.use("/orders", require("./orders.routes"));
+router.use("/payments", require("./payments.routes"));
 router.use("/coupons", require("./coupons.routes"));
 router.use("/auth", require("./auth.routes"));
 router.use("/settings", require("./settings.routes"));

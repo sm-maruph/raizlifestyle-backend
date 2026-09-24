@@ -45,12 +45,14 @@ const loginSchema = z.object({
 });
 
 const orderSchema = z.object({
+  customer_email: z.string().email().max(100).optional(),
+  customer_postcode: z.string().trim().min(1).max(30).optional(),
   customer_name: z.string().min(1).max(120),
   customer_phone: z.string().min(6).max(30),
   address: z.string().min(3).max(400),
   city: z.string().max(80).optional(),
   delivery_zone: z.enum(["inside_dhaka", "outside_dhaka"]),
-  payment_method: z.enum(["cod", "bkash", "nagad", "sslcommerz"]),
+  payment_method: z.enum(["cod", "sslcommerz"]),
   coupon_code: z.string().max(40).optional().nullable(),
   note: z.string().max(500).optional().nullable(),
   items: z

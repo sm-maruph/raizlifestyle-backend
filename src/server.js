@@ -17,13 +17,18 @@ app.use(helmet());
 
 // --- CORS: only allow your frontend origin(s) ---
 const origins = (process.env.CORS_ORIGIN || "").split(",").map((s) => s.trim()).filter(Boolean);
-app.use(cors({
+const storefrontCors = cors({
   origin: (origin, cb) => {
     if (!origin || origins.includes(origin)) return cb(null, true);
     return cb(new Error("Not allowed by CORS"));
   },
   credentials: true,
-}));
+});
+app.use((req, res, next) => {
+  // Gateway form POSTs are cross-origin navigations, not storefront API requests.
+  if (req.method === "POST" && /^\/api\/payments\/(success|fail|cancel|ipn)\/[0-9a-f]{64}$/.test(req.path)) return next();
+  return storefrontCors(req, res, next);
+});
 
 // --- Performance: gzip responses ---
 app.use(compression());

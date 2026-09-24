@@ -7,24 +7,44 @@ const { supabaseAdmin } = require("../config/supabase");
 const { evaluateCoupon, incrementCouponUsage } = require("../utils/couponPricing");
 const { orderSchema } = require("../validators/schemas");
 const { colorImage } = require("../utils/productColors");
+const { loadLiveCampaigns, applySaleToProduct } = require("../utils/salePricing");
+const sslcommerz = require("../utils/sslcommerz");
+const { randomBytes } = require("node:crypto");
 
 const router = express.Router();
 const DELIVERY = { inside_dhaka: 80, outside_dhaka: 120 };
 
 // POST /api/orders  (guest or logged-in) — totals computed SERVER-SIDE (never trust client)
-router.post("/", optionalAuth, validate(orderSchema), asyncHandler(async (req, res) => {
+const createOrder = asyncHandler(async (req, res) => {
   const b = req.body;
+  const online = b.payment_method === "sslcommerz";
+  if (online) {
+    sslcommerz.config();
+    if (!b.customer_email) return res.status(400).json({ error: "Email is required for online payment" });
+    if (!b.customer_postcode) return res.status(400).json({ error: "Postal code is required for online payment" });
+    // Check migration readiness before reserving inventory or creating an order.
+    const { error } = await supabaseAdmin.from("orders").select("payment_token").limit(0);
+    if (error) throw error;
+  }
+  const { live, linksByCamp } = await loadLiveCampaigns();
   const sizedProducts = new Map();
+  const quantities = new Map();
   for (const item of b.items) {
-    if (!item.product_id) continue;
+    if (!item.product_id) return res.status(400).json({ error: "A valid product is required" });
     const { data: product, error: productError } = await supabaseAdmin
-      .from("products").select("id,stock,sizes,size_stock,image,colors,product_images(url,position)").eq("id", item.product_id).single();
+      .from("products").select("id,name,price,is_active,category_id,subcategory_id,stock,sizes,size_stock,image,colors,product_images(url,position)").eq("id", item.product_id).single();
     if (productError || !product) return res.status(400).json({ error: `Product "${item.name}" is unavailable` });
+    if (!product.is_active) return res.status(400).json({ error: "Product is unavailable" });
+    applySaleToProduct(product, live, linksByCamp);
+    item.price = Number(product.price);
+    item.name = product.name;
     item.image = colorImage(product, item.color);
     const tracksSizes = (product.sizes || []).length > 0 && Object.keys(product.size_stock || {}).length > 0;
     const available = tracksSizes ? Number(product.size_stock?.[item.size] || 0) : Number(product.stock || 0);
     if (tracksSizes && (!item.size || !(product.sizes || []).includes(item.size))) return res.status(400).json({ error: `Select a valid size for "${item.name}"` });
-    if (Number(item.qty) > available) return res.status(409).json({ error: item.size ? `Only ${available} of "${item.name}" available in size ${item.size}` : `Only ${available} of "${item.name}" available` });
+    const stockKey = `${product.id}:${tracksSizes ? item.size : "all"}`;
+    quantities.set(stockKey, (quantities.get(stockKey) || 0) + Number(item.qty));
+    if (quantities.get(stockKey) > available) return res.status(409).json({ error: item.size ? `Only ${available} of "${item.name}" available in size ${item.size}` : `Only ${available} of "${item.name}" available` });
     if (tracksSizes) sizedProducts.set(product.id, product);
   }
   const subtotal = b.items.reduce((s, it) => s + Number(it.price) * it.qty, 0);
@@ -45,6 +65,7 @@ router.post("/", optionalAuth, validate(orderSchema), asyncHandler(async (req, r
   }
 
   const total = Math.max(0, subtotal + delivery - discount);
+  if (online && (total < 10 || total > 500000)) return res.status(400).json({ error: "Online payment total must be between BDT 10 and BDT 500,000" });
 
   const client = userClient(req.accessToken); // acts as the user (or guest) so RLS applies
   const { data, error } = await client.rpc("place_order", {
@@ -76,8 +97,32 @@ router.post("/", optionalAuth, validate(orderSchema), asyncHandler(async (req, r
   // Coupon consumed — bump its usage counter (best effort)
   if (appliedCoupon) await incrementCouponUsage(appliedCoupon.id);
 
+  if (online) {
+    const token = randomBytes(32).toString("hex");
+    const { data: order, error: paymentError } = await supabaseAdmin.from("orders").update({
+      payment_token: token, payment_transaction_id: sslcommerz.newTransactionId(), payment_status: "pending",
+    }).eq("order_code", data).select().single();
+    if (paymentError) throw paymentError;
+    let gateway_url;
+    try {
+      gateway_url = await sslcommerz.initiate(order, b.customer_email, b.customer_postcode);
+    } catch (error) {
+      console.error("SSLCommerz initiation failed", {
+        order_code: data,
+        reason: error.gatewayReason || "Gateway request failed or timed out",
+      });
+      // Preserve the existing order; a timeout can still have created a gateway session.
+      // Never retry by creating another order or assume a timeout means no charge.
+      const url = new URL(`${sslcommerz.config().frontend}/payment/failed`);
+      url.searchParams.set("token", token);
+      url.searchParams.set("reason", "initiation");
+      return res.status(201).json({ order_code: data, total, payment_token: token, payment_url: url.href });
+    }
+    return res.status(201).json({ order_code: data, total, payment_token: token, gateway_url });
+  }
   res.status(201).json({ order_code: data, subtotal, delivery, discount, total });
-}));
+});
+router.post("/", optionalAuth, validate(orderSchema), createOrder);
 
 // GET /api/orders/track/:code  (public) — single order via secure RPC
 router.get("/track/:code", asyncHandler(async (req, res) => {
@@ -117,7 +162,10 @@ router.patch("/:id/status", authenticate, requireAdmin, asyncHandler(async (req,
   if (!allowed.includes(next)) return res.status(400).json({ error: "Invalid status" });
 
   // read previous status first (to manage stock transitions)
-  const { data: prev } = await supabaseAdmin.from("orders").select("status").eq("id", req.params.id).single();
+  const { data: prev } = await supabaseAdmin.from("orders").select("status,payment_method,payment_status").eq("id", req.params.id).single();
+  if (prev?.payment_method === "sslcommerz" && prev.payment_status !== "paid" && ["Processing", "Shipped", "Delivered"].includes(next)) {
+    return res.status(409).json({ error: "Online payment must be verified before fulfillment" });
+  }
   const wasCancelled = prev?.status === "Cancelled";
 
   const { data, error } = await supabaseAdmin.from("orders").update({ status: next }).eq("id", req.params.id).select().single();
@@ -207,3 +255,4 @@ router.delete("/:id", authenticate, requireAdmin, asyncHandler(async (req, res) 
 }));
 
 module.exports = router;
+module.exports.createOrder = createOrder;
